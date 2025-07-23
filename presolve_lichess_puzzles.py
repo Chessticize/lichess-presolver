@@ -94,39 +94,35 @@ def process_puzzles(input_csv: str, output_csv: str, depth: int, stockfish_path:
         fieldnames = reader.fieldnames + [
             'stockfish_eval', 'stockfish_bestmove', 'stockfish_eval_after_first_move'
         ]
-        rows = list(reader)
-    
-    output_rows = []
-    for i, row in enumerate(rows):
-        fen = row['FEN']
-        moves = row['Moves']
-        print(f"Processing puzzle {i+1}/{len(rows)}", file=sys.stderr)
-        eval1, bestmove = run_stockfish(fen, depth, stockfish_path)
-        # Flip sign if side to move is black
-        try:
-            import chess
-            board = chess.Board(fen)
-            if board.turn == chess.BLACK and eval1 is not None:
-                eval1 = -eval1
-        except ImportError:
-            print("python-chess is required for move application. Install with 'pip install python-chess'", file=sys.stderr)
-            sys.exit(1)
-        # Get first move from moves (space or comma separated)
-        first_move = moves.split()[0].split(',')[0]
-        fen_after = apply_move_to_fen(fen, first_move)
-        eval2, _ = run_stockfish(fen_after, depth, stockfish_path)
-        # Flip sign if side to move is black after the move
-        board_after = chess.Board(fen_after)
-        if board_after.turn == chess.BLACK and eval2 is not None:
-            eval2 = -eval2
-        row['stockfish_eval'] = eval1
-        row['stockfish_bestmove'] = bestmove
-        row['stockfish_eval_after_first_move'] = eval2
-        output_rows.append(row)
-    with open(output_csv, 'w', newline='', encoding='utf-8') as outfile:
-        writer = csv.DictWriter(outfile, fieldnames=fieldnames)
-        writer.writeheader()
-        writer.writerows(output_rows)
+        with open(output_csv, 'w', newline='', encoding='utf-8') as outfile:
+            writer = csv.DictWriter(outfile, fieldnames=fieldnames)
+            writer.writeheader()
+            for i, row in enumerate(reader, 1):
+                fen = row['FEN']
+                moves = row['Moves']
+                print(f"Processing puzzle {i}", file=sys.stderr)
+                eval1, bestmove = run_stockfish(fen, depth, stockfish_path)
+                # Flip sign if side to move is black
+                try:
+                    import chess
+                    board = chess.Board(fen)
+                    if board.turn == chess.BLACK and eval1 is not None:
+                        eval1 = -eval1
+                except ImportError:
+                    print("python-chess is required for move application. Install with 'pip install python-chess'", file=sys.stderr)
+                    sys.exit(1)
+                # Get first move from moves (space or comma separated)
+                first_move = moves.split()[0].split(',')[0]
+                fen_after = apply_move_to_fen(fen, first_move)
+                eval2, _ = run_stockfish(fen_after, depth, stockfish_path)
+                # Flip sign if side to move is black after the move
+                board_after = chess.Board(fen_after)
+                if board_after.turn == chess.BLACK and eval2 is not None:
+                    eval2 = -eval2
+                row['stockfish_eval'] = eval1
+                row['stockfish_bestmove'] = bestmove
+                row['stockfish_eval_after_first_move'] = eval2
+                writer.writerow(row)
 
 
 def main():
