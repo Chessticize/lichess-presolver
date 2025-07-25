@@ -15,6 +15,7 @@ This command-line tool presolves Lichess puzzles by running Stockfish analysis o
 - All evaluations are **from White's perspective**.
 
 ## Requirements
+- Download Lichess puzzles: https://database.lichess.org/lichess_db_puzzle.csv.zst, unzip
 - Python 3.7+
 - [python-chess](https://pypi.org/project/python-chess/):
   ```sh
@@ -25,7 +26,10 @@ This command-line tool presolves Lichess puzzles by running Stockfish analysis o
 ## Usage
 
 ```sh
-python presolve_lichess_puzzles.py <input_csv> <output_csv> [--depth N] [--stockfish-path /path/to/stockfish]
+# Split the input files
+python3  split_csv_util.py puzzles/lichess_db_puzzle.csv 10 --output_prefix puzzles/split_
+# Evaluate 
+python3 presolve_lichess_puzzles.py <input_csv> <output_csv> [--depth N] [--stockfish-path /path/to/stockfish]
 ```
 
 - `<input_csv>`: Path to the input CSV file (must have `FEN` and `Moves` columns).
