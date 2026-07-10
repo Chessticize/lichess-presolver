@@ -15,6 +15,8 @@ sys.path.insert(0, str(REPOSITORY_ROOT))
 
 from presolve_lichess_puzzles import (  # noqa: E402
     MATE_SCORE_CP,
+    OUTPUT_COLUMNS,
+    SOURCE_COLUMNS,
     score_from_uci_tokens,
     score_to_white_perspective,
 )
@@ -153,18 +155,26 @@ class PublicCliTests(unittest.TestCase):
             self.assertIn("pass --overwrite", second_run.stderr)
 
     @unittest.skipUnless(shutil.which("stockfish"), "Stockfish is not installed")
-    def test_parallel_cli_runs_real_worker_process(self) -> None:
+    def test_small_batch_split_and_parallel_workflow(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
             input_dir = root / "input"
             output_dir = root / "output"
-            input_dir.mkdir()
-            with (input_dir / "split_1.csv").open(
-                "w", newline="", encoding="utf-8"
-            ) as output_file:
-                writer = csv.DictWriter(output_file, fieldnames=list(PUZZLE_ROW))
-                writer.writeheader()
-                writer.writerow(PUZZLE_ROW)
+            baseline_dir = root / "baseline"
+
+            subprocess.run(
+                [
+                    sys.executable,
+                    str(REPOSITORY_ROOT / "split_csv_util.py"),
+                    str(REPOSITORY_ROOT / "puzzles" / "example.csv"),
+                    "2",
+                    "--output-prefix",
+                    str(input_dir / "split_"),
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
 
             subprocess.run(
                 [
@@ -175,7 +185,7 @@ class PublicCliTests(unittest.TestCase):
                     "--output-dir",
                     str(output_dir),
                     "--jobs",
-                    "1",
+                    "2",
                     "--depth",
                     "1",
                     "--hash-mb",
@@ -186,8 +196,59 @@ class PublicCliTests(unittest.TestCase):
                 text=True,
             )
 
-            self.assertTrue((output_dir / "split_1.csv").is_file())
-            self.assertTrue((output_dir / "split_1.csv.metadata.json").is_file())
+            total_rows = 0
+            for input_path in sorted(input_dir.glob("split_*.csv")):
+                output_path = output_dir / input_path.name
+                baseline_path = baseline_dir / input_path.name
+                subprocess.run(
+                    [
+                        sys.executable,
+                        str(REPOSITORY_ROOT / "presolve_lichess_puzzles.py"),
+                        str(input_path),
+                        str(baseline_path),
+                        "--depth",
+                        "1",
+                        "--hash-mb",
+                        "16",
+                        "--progress-every",
+                        "0",
+                    ],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
+
+                with input_path.open(newline="", encoding="utf-8") as input_file:
+                    input_rows = list(csv.DictReader(input_file))
+                with output_path.open(newline="", encoding="utf-8") as output_file:
+                    output_rows = list(csv.DictReader(output_file))
+                with baseline_path.open(
+                    newline="", encoding="utf-8"
+                ) as baseline_file:
+                    baseline_rows = list(csv.DictReader(baseline_file))
+
+                self.assertEqual(output_rows, baseline_rows)
+                self.assertEqual(len(output_rows), len(input_rows))
+                for input_row, output_row in zip(input_rows, output_rows):
+                    self.assertTrue(
+                        all(
+                            input_row[column] == output_row[column]
+                            for column in SOURCE_COLUMNS
+                        )
+                    )
+                    self.assertTrue(all(output_row[column] for column in OUTPUT_COLUMNS))
+
+                metadata = json.loads(
+                    output_path.with_name(output_path.name + ".metadata.json").read_text(
+                        encoding="utf-8"
+                    )
+                )
+                self.assertEqual(metadata["output"]["rows"], len(output_rows))
+                self.assertEqual(metadata["stockfish"]["depth"], 1)
+                total_rows += len(output_rows)
+
+            self.assertEqual(total_rows, 4)
+            self.assertFalse(list(root.rglob("*.partial")))
 
 
 class DatasetComparisonTests(unittest.TestCase):

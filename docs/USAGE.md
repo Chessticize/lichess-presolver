@@ -92,6 +92,12 @@ Existing outputs are not replaced unless `--overwrite` is supplied. If one
 worker fails, the command reports every failed input and returns a non-zero exit
 status.
 
+For bit-for-bit comparisons, keep the Stockfish build, settings, shard layout,
+and row order fixed. A persistent engine reuses its transposition table, so
+changing how rows are grouped can change hash history and may produce different
+scores or best moves at the same nominal depth. This is expected engine search
+behavior, not row loss or corruption.
+
 ## Compare two generated corpora
 
 The repository includes the streaming audit used for the published dataset:
