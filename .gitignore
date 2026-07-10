@@ -1,2 +1,20 @@
-﻿lichess-presolve/bin
-lichess-presolve
+.DS_Store
+.idea/
+.vscode/
+.venv/
+__pycache__/
+*.py[cod]
+.coverage
+.pytest_cache/
+.ruff_cache/
+
+# Large source snapshots and generated outputs belong in GitHub Releases.
+puzzles/*
+!puzzles/example.csv
+puzzles_small/
+presolved/
+presolved-depth*/
+release-assets/
+*.csv.partial
+*.csv.metadata.json
+*.csv.zst
