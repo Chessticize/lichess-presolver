@@ -1,64 +1,87 @@
 # Lichess Puzzle Presolver
 
-This command-line tool presolves Lichess puzzles by running Stockfish analysis on each puzzle position. It reads a CSV of puzzles, evaluates each position and the position after the first move, and outputs a new CSV with Stockfish evaluations and best moves.
+Lichess Puzzle Presolver adds reproducible Stockfish evaluations to a snapshot
+of the [Lichess puzzle database](https://database.lichess.org/#puzzles). It can
+process one CSV, split a large snapshot, or run several split files in parallel.
 
-## Features
-- Reads puzzles from a CSV file (must include `FEN` and `Moves` columns).
-- Runs Stockfish to:
-  - Evaluate the current position.
-  - Find the best move.
-  - Evaluate the position after the first move in the solution.
-- Outputs a CSV with the original columns plus:
-  - `stockfish_eval` (evaluation of the original position)
-  - `stockfish_bestmove` (Stockfish's best move)
-  - `stockfish_eval_after_first_move` (evaluation after the first move)
-- All evaluations are **from White's perspective**.
+The repository also distributes a presolved July 2025 snapshot as compressed
+[GitHub Release assets](https://github.com/Chessticize/lichess-presolver/releases).
+Only the later **depth-20** corpus is distributed. A complete comparison found
+that the older `presolved-depth16` corpus was not the better-quality set; see
+[Dataset provenance and quality](docs/DATASET.md).
 
-## Requirements
-- Download Lichess puzzles: https://database.lichess.org/lichess_db_puzzle.csv.zst, unzip
-- Python 3.7+
-- [python-chess](https://pypi.org/project/python-chess/):
-  ```sh
-  pip install python-chess
-  ```
-- Stockfish engine installed and available in your WSL/Linux environment's PATH, or specify the path with `--stockfish-path`.
+## Download the presolved data
 
-## Usage
+Download all eight independently decompressible assets from the latest dataset
+release:
 
 ```sh
-# Split the input files
-python3  split_csv_util.py puzzles/lichess_db_puzzle.csv 10 --output_prefix puzzles/split_
-# Evaluate 
-python3 presolve_lichess_puzzles.py <input_csv> <output_csv> [--depth N] [--stockfish-path /path/to/stockfish]
+gh release download dataset-2025-07-depth20 \
+  --repo Chessticize/lichess-presolver
+shasum -a 256 -c SHA256SUMS
+unzstd lichess-puzzles-presolved-depth20-2025-07-split-*.csv.zst
 ```
 
-- `<input_csv>`: Path to the input CSV file (must have `FEN` and `Moves` columns).
-- `<output_csv>`: Path to the output CSV file.
-- `--depth N`: (Optional) Stockfish search depth (default: 20).
-- `--stockfish-path`: (Optional) Path to Stockfish binary (default: `stockfish`).
+The release contains 4,824,507 puzzle rows split round-robin across eight CSV
+files. Verify downloads with the release's `SHA256SUMS` file. The original
+Lichess columns are preserved and three fields are appended:
 
-**Example:**
+| Column | Meaning |
+| --- | --- |
+| `stockfish_eval` | Evaluation of the source FEN, in centipawns from White's point of view |
+| `stockfish_bestmove` | Stockfish's best move in the source FEN, in UCI notation |
+| `stockfish_eval_after_first_move` | Evaluation after applying the first move in `Moves`, from White's point of view |
+
+Forced mates are represented as `+10000` or `-10000`; the distance to mate is
+not retained.
+
+## Run the presolver
+
+Requirements:
+
+- Python 3.10 or newer
+- Stockfish available as `stockfish`, or an explicit `--stockfish-path`
+
+No third-party Python package is required.
+
 ```sh
-python presolve_lichess_puzzles.py puzzles/example.csv puzzles/example_out.csv --depth 20
+python3 presolve_lichess_puzzles.py \
+  puzzles/example.csv \
+  example-presolved.csv \
+  --depth 20
 ```
 
-## Stockfish Evaluation Handling
-- **All evaluations are normalized to White's perspective:**
-  - If the position is good for White, the evaluation is positive.
-  - If the position is good for Black, the evaluation is negative.
-  - This is true for both the original position and after the first move.
-- The program automatically flips the sign of Stockfish's evaluation if the side to move in the FEN is Black.
+The command writes a metadata sidecar containing the input and output SHA-256
+digests, engine identity, depth, thread count, hash size, timestamps, and row
+count. Existing outputs are protected unless `--overwrite` is passed.
 
-## Mate Situations
-- If Stockfish finds a forced mate, the evaluation is set to:
-  - `+10000` if White is delivering mate (mate in N for White, or Black is being mated)
-  - `-10000` if White is being mated (mate in N for Black, or White is being mated)
-- This convention is used for both the original and after-move evaluations.
-- The actual number of moves to mate is not preserved in the output; only the decisive result is indicated by ±10000.
+For a full snapshot:
 
-## Notes
-- The input CSV must have at least the columns `FEN` and `Moves` (case-sensitive).
-- The script must be run in a Linux/WSL environment where Stockfish is available.
+```sh
+python3 split_csv_util.py lichess_db_puzzle.csv 8 \
+  --output-prefix puzzles/split_
+python3 solve_parallel.py \
+  --input-dir puzzles \
+  --output-dir presolved-depth20 \
+  --depth 20 \
+  --jobs 8
+```
 
-## License
-MIT 
+See [Usage guide](docs/USAGE.md) for installation, resource sizing, CSV
+semantics, verification, and troubleshooting.
+
+## Project documents
+
+- [Usage guide](docs/USAGE.md)
+- [Dataset provenance and quality](docs/DATASET.md)
+- [Contributing](CONTRIBUTING.md)
+
+## Licensing
+
+Repository software is licensed under the [MIT License](LICENSE). Lichess
+database exports and the derived release data are distributed under
+[CC0 1.0](DATA_LICENSE.md). Lichess attribution is included as a courtesy even
+though CC0 does not require it.
+
+This is an independent project and is not affiliated with or endorsed by
+Lichess.
