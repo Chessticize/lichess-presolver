@@ -5,7 +5,7 @@ of the [Lichess puzzle database](https://database.lichess.org/#puzzles). It can
 process one CSV, split a large snapshot, or run several split files in parallel.
 
 The repository also distributes a presolved July 2025 snapshot as compressed
-[GitHub Release assets](https://github.com/Chessticize/lichess-presolve/releases).
+[GitHub Release assets](https://github.com/Chessticize/lichess-presolver/releases).
 Only the later **depth-20** corpus is distributed. A complete comparison found
 that the older `presolved-depth16` corpus was not the better-quality set; see
 [Dataset provenance and quality](docs/DATASET.md).
@@ -17,7 +17,7 @@ release:
 
 ```sh
 gh release download dataset-2025-07-depth20 \
-  --repo Chessticize/lichess-presolve
+  --repo Chessticize/lichess-presolver
 shasum -a 256 -c SHA256SUMS
 unzstd lichess-puzzles-presolved-depth20-2025-07-split-*.csv.zst
 ```

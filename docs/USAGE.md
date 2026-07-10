@@ -121,7 +121,7 @@ the shards they need:
 
 ```sh
 gh release download dataset-2025-07-depth20 \
-  --repo Chessticize/lichess-presolve
+  --repo Chessticize/lichess-presolver
 shasum -a 256 -c SHA256SUMS
 unzstd lichess-puzzles-presolved-depth20-2025-07-split-1.csv.zst
 ```
