@@ -67,8 +67,66 @@ python3 solve_parallel.py \
   --jobs 8
 ```
 
+## Measure Arrow Duel top-move route depth
+
+`classify_arrow_duel_routes.py` measures how constrained the stored top-move
+route is. It analyzes only the Arrow Duel-compatible subset of a generated
+Core Pack; Core Pack quality, legality, and evaluation-gap checks remain owned
+by the pack builder, and Standard-only promotion candidates never reach
+Stockfish. Both legacy text rows and the versioned binary-v1 Core Pack encoding
+are supported; unknown pack formats fail closed.
+
+```sh
+python3 classify_arrow_duel_routes.py \
+  ../chessticize-mobile/fixtures/puzzles/bundled-core-pack.sqlite \
+  arrow-duel-routes.sqlite \
+  --report arrow-duel-routes.report.json \
+  --compact-output arrow-duel-routes.compact.sqlite \
+  --depth 10 \
+  --multipv 2 \
+  --jobs 10
+```
+
+The analysis stores `top_move_unique_plies` for each Arrow Duel input. It
+follows the Core Pack's stored top move, takes the opponent's best replies, and
+counts plies until the chooser first has multiple good continuations or the
+line terminates. Root alternatives are deliberately ignored because Arrow Duel
+shows only the stored top move and the puzzle's blunder. A unique mate in one
+has depth one. `max_unique_plies + 1` means no branch or terminal was found
+inside the analysis window. `unique_followup_moves` is derived as
+`floor((top_move_unique_plies - 1) / 2)` and excludes the displayed top move.
+With the default ten-ply window, the last bucket is `4+`: four forced
+puzzle-side follow-ups are established, but the route is censored before the
+next choice.
+
+Only the best and second-best continuations are searched. If the second-best
+line is outside the accepted score or mate-distance threshold, every
+lower-ranked move is also outside it; if it is inside, uniqueness is already
+disproved.
+
+These are engine- and depth-qualified route metrics, not a universal difficulty
+class. The audit SQLite sidecar keeps metric definitions in
+`arrow_duel_metric_definitions` and row values in
+`arrow_duel_route_metrics`. The JSON report records count distributions,
+unique follow-up counts, rating buckets, and deterministic sample IDs. The
+optional compact SQLite output contains no puzzle-ID strings: it binds
+to the exact input hash and packs two Core Pack `puzzles.rowid` values per byte
+in 4,096-row BLOB chunks. Each four-bit value is the top-move route depth; zero
+means that row is outside the Arrow Duel input set. The metric definition
+remains normalized in one small definition table.
+
+Each puzzle starts a fresh UCI game before analysis. This prevents a worker's
+transposition-table history from changing another puzzle's result. Interrupted
+runs can continue with `--resume` only when the input hash, engine identity,
+depth, job layout, and metric thresholds still match. The input SHA-256 is
+checked again after analysis and before compact export, so a Core Pack replaced
+during a run cannot produce a completed report. The original presolver
+continues to read and write CSV; only this Core Pack analyzer uses SQLite.
+
 See [Usage guide](docs/USAGE.md) for installation, resource sizing, CSV
-semantics, verification, and troubleshooting.
+semantics, verification, and troubleshooting. The
+[Arrow Duel route metric note](docs/ARROW_DUEL_ROUTE_METRICS.md) records the
+root-exclusion contract and the depth 10/16/20 stability and speed benchmark.
 
 ## Project documents
 

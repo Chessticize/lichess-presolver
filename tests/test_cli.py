@@ -17,6 +17,7 @@ from presolve_lichess_puzzles import (  # noqa: E402
     MATE_SCORE_CP,
     OUTPUT_COLUMNS,
     SOURCE_COLUMNS,
+    StockfishEngine,
     score_from_uci_tokens,
     score_to_white_perspective,
 )
@@ -62,6 +63,16 @@ class ScoreParsingTests(unittest.TestCase):
 
 
 class PublicCliTests(unittest.TestCase):
+    @unittest.skipUnless(shutil.which("stockfish"), "Stockfish is not installed")
+    def test_stockfish_distinguishes_checkmate_from_stalemate(self) -> None:
+        with StockfishEngine("stockfish", threads=1, hash_mb=16) as engine:
+            self.assertTrue(
+                engine.is_checkmate("7k/6Q1/6K1/8/8/8/8/8 b - - 0 1")
+            )
+            self.assertFalse(
+                engine.is_checkmate("7k/5Q2/6K1/8/8/8/8/8 b - - 0 1")
+            )
+
     def test_split_cli_preserves_all_rows(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)

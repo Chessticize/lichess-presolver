@@ -6,8 +6,8 @@ public behavior.
 Before opening a pull request:
 
 ```sh
-python3 -m compileall -q presolve_lichess_puzzles.py solve_parallel.py \
-  split_csv_util.py tools tests
+python3 -m compileall -q presolve_lichess_puzzles.py \
+  classify_arrow_duel_routes.py solve_parallel.py split_csv_util.py tools tests
 python3 -m unittest discover -s tests -v
 git diff --check
 ```
