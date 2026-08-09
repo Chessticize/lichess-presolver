@@ -32,6 +32,23 @@ These values are qualified by Stockfish version, search depth, MultiPV count,
 evaluation tolerance, and route window. They are not engine-independent puzzle
 facts. Every output records that analysis identity and the exact input SHA-256.
 
+## Interpretation limit: not a standalone difficulty label
+
+This metric describes the branching structure after the displayed top move; it
+does not directly measure how difficult that move or its continuation feels to
+a human solver. An informal hands-on evaluation on August 9, 2026 found that
+positions in the censored `4+` bucket did not consistently feel harder than
+positions with fewer unique follow-ups. Long forced routes can consist of
+obvious forcing moves, while a position with an early branch can still require
+a difficult tactical idea.
+
+The follow-up bucket should therefore remain a structural analysis signal, not
+be used by itself as an Arrow Duel difficulty filter. Any future difficulty
+model should combine it with additional signals and be validated against human
+solving experience before product use. The paused standalone-filter
+experiment is recorded in
+[Chessticize Mobile PR #525](https://github.com/Chessticize/chessticize-mobile/pull/525).
+
 ## MultiPV 5 search-depth baseline
 
 The benchmark was run on August 3, 2026 with Stockfish 18. The versioned
