@@ -44,6 +44,9 @@ class StockfishError(RuntimeError):
 class Evaluation:
     score_cp: int
     bestmove: str
+    principal_variation: tuple[str, ...] = ()
+    depth: int = 0
+    mate_in: int | None = None
 
 
 def score_from_uci_tokens(tokens: list[str]) -> int | None:
@@ -63,6 +66,19 @@ def score_from_uci_tokens(tokens: list[str]) -> int | None:
     if score_type == "mate":
         return MATE_SCORE_CP if value > 0 else -MATE_SCORE_CP
     return None
+
+
+def mate_from_uci_tokens(tokens: list[str]) -> int | None:
+    """Return Stockfish's signed mate distance from one UCI info line."""
+    if "score" not in tokens:
+        return None
+    index = tokens.index("score")
+    if index + 2 >= len(tokens) or tokens[index + 1] != "mate":
+        return None
+    try:
+        return int(tokens[index + 2])
+    except ValueError:
+        return None
 
 
 def score_to_white_perspective(score: int, fen: str, applied_moves: int = 0) -> int:
@@ -101,7 +117,7 @@ class StockfishEngine:
         self._send("setoption name UCI_Chess960 value false")
         self._send("isready")
         self._wait_for("readyok")
-        self._send("ucinewgame")
+        self.start_new_game()
 
     @property
     def stdin(self) -> TextIO:
@@ -138,14 +154,31 @@ class StockfishEngine:
                 return
         raise StockfishError(f"Stockfish exited before returning {expected!r}")
 
+    def start_new_game(self) -> None:
+        """Reset engine search state before an independent position."""
+        self._send("ucinewgame")
+        self._send("isready")
+        self._wait_for("readyok")
+
     def evaluate(
-        self, fen: str, depth: int, moves: Iterable[str] = ()
+        self,
+        fen: str,
+        depth: int,
+        moves: Iterable[str] = (),
+        searchmoves: Iterable[str] = (),
     ) -> Evaluation:
         move_list = list(moves)
+        search_move_list = list(searchmoves)
         suffix = f" moves {' '.join(move_list)}" if move_list else ""
         self._send(f"position fen {fen}{suffix}")
-        self._send(f"go depth {depth}")
+        search_suffix = (
+            f" searchmoves {' '.join(search_move_list)}" if search_move_list else ""
+        )
+        self._send(f"go depth {depth}{search_suffix}")
         score: int | None = None
+        mate_in: int | None = None
+        principal_variation: tuple[str, ...] = ()
+        principal_variation_depth = 0
 
         for line in self.stdout:
             tokens = line.split()
@@ -153,25 +186,129 @@ class StockfishEngine:
                 candidate = score_from_uci_tokens(tokens)
                 if candidate is not None:
                     score = candidate
+                    raw_mate = mate_from_uci_tokens(tokens)
+                    mate_in = (
+                        score_to_white_perspective(raw_mate, fen, len(move_list))
+                        if raw_mate is not None
+                        else None
+                    )
+                if "pv" in tokens:
+                    pv_index = tokens.index("pv")
+                    depth_index = tokens.index("depth") if "depth" in tokens else -1
+                    try:
+                        info_depth = int(tokens[depth_index + 1]) if depth_index >= 0 else 0
+                    except (IndexError, ValueError):
+                        info_depth = 0
+                    if info_depth >= principal_variation_depth:
+                        principal_variation = tuple(tokens[pv_index + 1 :])
+                        principal_variation_depth = info_depth
             elif tokens[:1] == ["bestmove"]:
                 if score is None or len(tokens) < 2 or tokens[1] == "(none)":
                     raise StockfishError(f"Incomplete Stockfish result for FEN {fen!r}")
                 return Evaluation(
                     score_cp=score_to_white_perspective(score, fen, len(move_list)),
                     bestmove=tokens[1],
+                    principal_variation=principal_variation,
+                    depth=principal_variation_depth,
+                    mate_in=mate_in,
                 )
 
         raise StockfishError("Stockfish exited before returning a best move")
 
-    def close(self) -> None:
-        if self.process.poll() is not None:
-            return
+    def evaluate_multipv(
+        self,
+        fen: str,
+        depth: int,
+        *,
+        multipv: int,
+        moves: Iterable[str] = (),
+    ) -> tuple[Evaluation, ...]:
+        """Return distinct root continuations ordered by Stockfish preference."""
+        if multipv < 1:
+            raise ValueError("multipv must be at least 1")
+        move_list = list(moves)
+        suffix = f" moves {' '.join(move_list)}" if move_list else ""
+        self._send(f"setoption name MultiPV value {multipv}")
         try:
-            self._send("quit")
-            self.process.wait(timeout=5)
-        except (BrokenPipeError, StockfishError, subprocess.TimeoutExpired):
-            self.process.kill()
-            self.process.wait()
+            self._send(f"position fen {fen}{suffix}")
+            self._send(f"go depth {depth}")
+            lines: dict[int, Evaluation] = {}
+            for line in self.stdout:
+                tokens = line.split()
+                if tokens[:1] == ["info"] and "pv" in tokens:
+                    score = score_from_uci_tokens(tokens)
+                    if score is None:
+                        continue
+                    pv_index = tokens.index("pv")
+                    principal_variation = tuple(tokens[pv_index + 1 :])
+                    if not principal_variation:
+                        continue
+                    multipv_index = tokens.index("multipv") if "multipv" in tokens else -1
+                    depth_index = tokens.index("depth") if "depth" in tokens else -1
+                    try:
+                        line_number = (
+                            int(tokens[multipv_index + 1]) if multipv_index >= 0 else 1
+                        )
+                        info_depth = (
+                            int(tokens[depth_index + 1]) if depth_index >= 0 else 0
+                        )
+                    except (IndexError, ValueError):
+                        continue
+                    existing = lines.get(line_number)
+                    if existing is not None and existing.depth > info_depth:
+                        continue
+                    lines[line_number] = Evaluation(
+                        score_cp=score_to_white_perspective(
+                            score, fen, len(move_list)
+                        ),
+                        bestmove=principal_variation[0],
+                        principal_variation=principal_variation,
+                        depth=info_depth,
+                        mate_in=(
+                            score_to_white_perspective(
+                                raw_mate, fen, len(move_list)
+                            )
+                            if (raw_mate := mate_from_uci_tokens(tokens)) is not None
+                            else None
+                        ),
+                    )
+                elif tokens[:1] == ["bestmove"]:
+                    break
+            if not lines:
+                raise StockfishError(
+                    f"Stockfish returned no MultiPV lines for FEN {fen!r}"
+                )
+            return tuple(lines[index] for index in sorted(lines))
+        finally:
+            self._send("setoption name MultiPV value 1")
+
+    def is_checkmate(self, fen: str, moves: Iterable[str] = ()) -> bool:
+        """Return whether the reached position is terminal checkmate."""
+        move_list = list(moves)
+        suffix = f" moves {' '.join(move_list)}" if move_list else ""
+        self._send(f"position fen {fen}{suffix}")
+        self._send("go depth 1")
+        saw_mate_zero = False
+        for line in self.stdout:
+            tokens = line.split()
+            if tokens[:1] == ["info"]:
+                saw_mate_zero = saw_mate_zero or mate_from_uci_tokens(tokens) == 0
+            elif tokens[:1] == ["bestmove"]:
+                no_move = len(tokens) < 2 or tokens[1] in {"(none)", "0000"}
+                return no_move and saw_mate_zero
+        raise StockfishError("Stockfish exited before returning a best move")
+
+    def close(self) -> None:
+        if self.process.poll() is None:
+            try:
+                self._send("quit")
+                self.process.wait(timeout=5)
+            except (BrokenPipeError, StockfishError, subprocess.TimeoutExpired):
+                self.process.kill()
+                self.process.wait()
+        for stream in (self.process.stdin, self.process.stdout):
+            if stream is not None and not stream.closed:
+                stream.close()
 
     def __enter__(self) -> StockfishEngine:
         return self
