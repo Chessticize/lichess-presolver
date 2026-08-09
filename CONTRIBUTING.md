@@ -12,10 +12,12 @@ python3 -m unittest discover -s tests -v
 git diff --check
 ```
 
-The integration test intentionally starts a real Stockfish process. Do not
-replace it with a mock of internal behavior. Tests for failure modes may use a
-small maintained fake UCI executable when a real engine cannot produce the
-condition deterministically.
+The integration test intentionally starts a real Stockfish 18 process. Ensure
+the `stockfish` executable on `PATH` reports Stockfish 18 before running the
+suite, because the route regression values are engine-qualified. Do not replace
+it with a mock of internal behavior. Tests for failure modes may use a small
+maintained fake UCI executable when a real engine cannot produce the condition
+deterministically.
 
 Do not commit Lichess snapshots, generated CSVs, compressed release assets, or
 partial outputs. Publish large datasets through GitHub Releases and include a

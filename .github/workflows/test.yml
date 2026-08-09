@@ -18,10 +18,22 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-      - name: Install Stockfish
+      - name: Install Stockfish 18
+        env:
+          STOCKFISH_ARCHIVE_SHA256: 5c6f38b02a4da5f3ffe763f27da6c3e743eebefd92b50cb3661623b96696adff
+          STOCKFISH_ARCHIVE_URL: https://github.com/official-stockfish/Stockfish/releases/download/sf_18/stockfish-ubuntu-x86-64.tar
         run: |
-          sudo apt-get update
-          sudo apt-get install --yes stockfish
-          echo /usr/games >> "$GITHUB_PATH"
+          archive="$RUNNER_TEMP/stockfish-ubuntu-x86-64.tar"
+          curl --fail --location --retry 3 \
+            --output "$archive" \
+            "$STOCKFISH_ARCHIVE_URL"
+          echo "$STOCKFISH_ARCHIVE_SHA256  $archive" | sha256sum --check -
+          tar --extract --file "$archive" --directory "$RUNNER_TEMP"
+          mkdir --parents "$RUNNER_TEMP/bin"
+          install --mode 0755 \
+            "$RUNNER_TEMP/stockfish/stockfish-ubuntu-x86-64" \
+            "$RUNNER_TEMP/bin/stockfish"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/bin/stockfish" <<< "quit" | grep --fixed-strings "Stockfish 18"
       - name: Run tests
         run: python -m unittest discover -s tests -v
