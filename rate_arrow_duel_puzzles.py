@@ -13,9 +13,12 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Protocol, Sequence
+from typing import Any, Protocol, Sequence
 
-import numpy as np
+try:
+    import numpy as np  # type: ignore[import-not-found]
+except ImportError:  # pragma: no cover - stdlib-only CI fallback
+    np = None  # type: ignore[assignment]
 
 from classify_arrow_duel_routes import (
     PACK_PIECES,
@@ -78,8 +81,8 @@ class PairwisePolicyScorer(Protocol):
         rows: Sequence[ArrowDuelPuzzleRow],
         row_encoding: str,
         elos: Sequence[int],
-    ) -> np.ndarray:
-        """Return float32 array of shape (len(rows), len(elos)) with q(E) in [0, 1]."""
+    ) -> Any:
+        """Return float32 array or nested list of shape (len(rows), len(elos)) with q(E) in [0, 1]."""
         ...
 
 
@@ -113,56 +116,74 @@ def solve_prompted_arrow_duel_rating(
     if len(elos) != len(qs) or not elos:
         raise ValueError("elos and qs must have identical non-zero length")
 
-    # Vectorized search on a 5-Elo grid from 400 to 2800, then linear interpolation
-    elo_arr = np.asarray(elos, dtype=np.float64)
-    q_arr = np.clip(np.asarray(qs, dtype=np.float64), 0.0, 1.0)
+    elo_vals = [float(e) for e in elos]
+    q_vals = [max(0.0, min(1.0, float(q))) for q in qs]
 
-    lo_grid = 400.0
-    hi_grid = 2800.0
-    step = 5.0
-    grid = np.arange(lo_grid, hi_grid + 1.0, step, dtype=np.float64)
-    q_grid = np.interp(grid, elo_arr, q_arr)
-    z = np.clip((grid - float(original_rating)) / GLICKO_SCALE, -35.0, 35.0)
-    p_ref = check_rate / (1.0 + np.exp(-z))
-    p_ad = p_ref + (1.0 - p_ref) * q_grid
+    def interp_q(e: float) -> float:
+        if e <= elo_vals[0]:
+            return q_vals[0]
+        if e >= elo_vals[-1]:
+            return q_vals[-1]
+        for idx in range(1, len(elo_vals)):
+            if e <= elo_vals[idx]:
+                lo_e, hi_e = elo_vals[idx - 1], elo_vals[idx]
+                w = (e - lo_e) / max(1e-6, hi_e - lo_e)
+                return q_vals[idx - 1] * (1.0 - w) + q_vals[idx] * w
+        return q_vals[-1]
 
-    if p_ad[0] >= target_prob:
-        return int(min_rating)
-    if p_ad[-1] <= target_prob:
-        return int(max_rating)
-
-    idx = int(np.argmax(p_ad >= target_prob))
-    if idx == 0:
-        est = float(grid[0])
-    else:
-        e0, e1 = float(grid[idx - 1]), float(grid[idx])
-        p0, p1 = float(p_ad[idx - 1]), float(p_ad[idx])
-        frac = (target_prob - p0) / max(1e-9, p1 - p0)
-        est = e0 + frac * (e1 - e0)
-    return int(max(min_rating, min(max_rating, round(est))))
+    orig = float(original_rating)
+    prev_e = 400.0
+    prev_p = -1.0
+    for step_idx in range(481):  # 400.0 .. 2800.0 in steps of 5.0
+        e = 400.0 + 5.0 * step_idx
+        p_ref = check_rate * sigmoid_scalar((e - orig) / GLICKO_SCALE)
+        p = p_ref + (1.0 - p_ref) * interp_q(e)
+        if p >= target_prob:
+            if step_idx == 0:
+                return int(min_rating)
+            frac = (target_prob - prev_p) / max(1e-9, p - prev_p)
+            est = prev_e + frac * (e - prev_e)
+            return int(max(min_rating, min(max_rating, round(est))))
+        prev_e = e
+        prev_p = p
+    return int(max_rating)
 
 
 def solve_prompted_arrow_duel_batch(
-    original_ratings: np.ndarray,
+    original_ratings: Sequence[int] | Any,
     elos: Sequence[int],
-    q_matrix: np.ndarray,
+    q_matrix: Sequence[Sequence[float]] | Any,
     *,
     target_prob: float = DEFAULT_TARGET_PROB,
     check_rate: float = DEFAULT_FULL_CHECK_RATE,
     min_rating: int = DEFAULT_MIN_RATING,
     max_rating: int = DEFAULT_MAX_RATING,
-) -> np.ndarray:
+) -> Any:
     """Vectorized version of solve_prompted_arrow_duel_rating for a batch (N, K)."""
     n = len(original_ratings)
+    if np is None:
+        return [
+            solve_prompted_arrow_duel_rating(
+                int(original_ratings[i]),
+                elos,
+                q_matrix[i],
+                target_prob=target_prob,
+                check_rate=check_rate,
+                min_rating=min_rating,
+                max_rating=max_rating,
+            )
+            for i in range(n)
+        ]
     if n == 0:
         return np.empty((0,), dtype=np.int32)
 
+    orig_arr = np.asarray(original_ratings, dtype=np.float32)
+    q_arr = np.asarray(q_matrix, dtype=np.float32)
     elo_arr = np.asarray(elos, dtype=np.float32)
     grid = np.arange(400.0, 2801.0, 5.0, dtype=np.float32)  # (G,)
-    g_len = len(grid)
 
     # Piecewise linear interpolation of q_matrix (N, K) onto grid (G,)
-    q_clip = np.clip(q_matrix.astype(np.float32), 0.0, 1.0)
+    q_clip = np.clip(q_arr, 0.0, 1.0)
     idx_hi = np.searchsorted(elo_arr, grid, side="right")
     idx_hi = np.clip(idx_hi, 1, len(elo_arr) - 1)
     idx_lo = idx_hi - 1
@@ -175,7 +196,7 @@ def solve_prompted_arrow_duel_batch(
     q_grid = q_clip[:, idx_lo] * (1.0 - w[None, :]) + q_clip[:, idx_hi] * w[None, :]
 
     z = np.clip(
-        (grid[None, :] - original_ratings.astype(np.float32)[:, None]) / np.float32(GLICKO_SCALE),
+        (grid[None, :] - orig_arr[:, None]) / np.float32(GLICKO_SCALE),
         -35.0,
         35.0,
     )
@@ -202,7 +223,7 @@ def solve_prompted_arrow_duel_batch(
     return np.clip(np.rint(est), min_rating, max_rating).astype(np.int32)
 
 
-def encode_binary_v1_position_to_maia3(blob: bytes, out_64x12: np.ndarray) -> bool:
+def encode_binary_v1_position_to_maia3(blob: bytes, out_64x12: Any) -> bool:
     """
     Fill a zeroed (64, 12) float32 array directly from a Core Pack binary-v1 position BLOB,
     matching `maia3.dataset.tokenize_board(chess.Board(fen))` bit-for-bit.
@@ -229,11 +250,11 @@ def encode_binary_v1_position_to_maia3(blob: bytes, out_64x12: np.ndarray) -> bo
             else:
                 target_sq = sq
                 ch = code - 1
-            out_64x12[target_sq, ch] = 1.0
+            out_64x12[target_sq][ch] = 1.0
     return is_black
 
 
-def encode_fen_to_maia3(fen: str, out_64x12: np.ndarray) -> bool:
+def encode_fen_to_maia3(fen: str, out_64x12: Any) -> bool:
     """Fill a zeroed (64, 12) float32 array directly from a FEN string."""
     fields = fen.strip().split()
     placement = fields[0]
@@ -253,7 +274,7 @@ def encode_fen_to_maia3(fen: str, out_64x12: np.ndarray) -> bool:
             if is_black:
                 sq ^= 56
                 ch = ch + 6 if ch < 6 else ch - 6
-            out_64x12[sq, ch] = 1.0
+            out_64x12[sq][ch] = 1.0
     return is_black
 
 
@@ -588,6 +609,15 @@ def build_report(
             "elapsedSeconds": round(elapsed_seconds, 2),
         }
 
+    if np is None:
+        return _build_report_stdlib(
+            rows,
+            identity,
+            total_pack_puzzles=total_pack_puzzles,
+            total_eligible=total_eligible,
+            elapsed_seconds=elapsed_seconds,
+        )
+
     orig = np.fromiter((r[1] for r in rows), dtype=np.float64, count=n)
     ad = np.fromiter((r[2] for r in rows), dtype=np.float64, count=n)
     ad_s = np.fromiter((r[3] for r in rows), dtype=np.float64, count=n)
@@ -696,6 +726,135 @@ def build_report(
     }
 
 
+def _build_report_stdlib(
+    rows: list[tuple[str, int, int, int, int]],
+    identity: dict[str, object],
+    *,
+    total_pack_puzzles: int,
+    total_eligible: int,
+    elapsed_seconds: float,
+) -> dict[str, object]:
+    n = len(rows)
+    orig = [float(r[1]) for r in rows]
+    ad = [float(r[2]) for r in rows]
+    ad_s = [float(r[3]) for r in rows]
+    q15 = [r[4] / 10000.0 for r in rows]
+
+    def mean(xs: Sequence[float]) -> float:
+        return sum(xs) / len(xs)
+
+    def std(xs: Sequence[float]) -> float:
+        m = mean(xs)
+        return math.sqrt(sum((x - m) ** 2 for x in xs) / len(xs))
+
+    def percentile(xs: Sequence[float], pct: float) -> float:
+        s = sorted(xs)
+        pos = (len(s) - 1) * (pct / 100.0)
+        lo = int(math.floor(pos))
+        hi = min(len(s) - 1, lo + 1)
+        return s[lo] + (pos - lo) * (s[hi] - s[lo])
+
+    def pearson(xs: Sequence[float], ys: Sequence[float]) -> float:
+        if len(xs) <= 1:
+            return 0.0
+        sx, sy = std(xs), std(ys)
+        if sx == 0.0 or sy == 0.0:
+            return 0.0
+        mx, my = mean(xs), mean(ys)
+        return sum((x - mx) * (y - my) for x, y in zip(xs, ys)) / (len(xs) * sx * sy)
+
+    def ranks(xs: Sequence[float]) -> list[float]:
+        order = sorted(range(len(xs)), key=lambda idx: xs[idx])
+        out = [0.0] * len(xs)
+        for rank_idx, orig_idx in enumerate(order):
+            out[orig_idx] = float(rank_idx)
+        return out
+
+    def summarize_pair(arr: Sequence[float]) -> dict[str, object]:
+        diff = [a - o for a, o in zip(arr, orig)]
+        abs_diff = [abs(d) for d in diff]
+        return {
+            "mean": round(mean(arr), 2),
+            "std": round(std(arr), 2),
+            "min": int(min(arr)),
+            "max": int(max(arr)),
+            "pearsonR": round(pearson(orig, arr), 4),
+            "spearmanRho": round(pearson(ranks(orig), ranks(arr)), 4),
+            "deltaMean": round(mean(diff), 2),
+            "deltaMedian": round(percentile(diff, 50.0), 2),
+            "deltaMad": round(percentile(abs_diff, 50.0), 2),
+            "shareWithin150": round(sum(1 for d in abs_diff if d <= 150) / n, 4),
+            "shareWithin300": round(sum(1 for d in abs_diff if d <= 300) / n, 4),
+            "shareDropAtLeast400": round(sum(1 for d in diff if d <= -400) / n, 4),
+            "shareRiseAtLeast400": round(sum(1 for d in diff if d >= 400) / n, 4),
+        }
+
+    orig_buckets = []
+    for lo in range(600, 2200, 200):
+        hi = lo + 200 if lo < 2000 else 2201
+        sub = [a for o, a in zip(orig, ad) if lo <= o < hi]
+        if not sub:
+            continue
+        orig_buckets.append(
+            {
+                "minOriginalRating": lo,
+                "maxOriginalRating": 2200 if lo == 2000 else lo + 199,
+                "count": len(sub),
+                "adMean": round(mean(sub), 1),
+                "adP10": int(round(percentile(sub, 10.0))),
+                "adMedian": int(round(percentile(sub, 50.0))),
+                "adP90": int(round(percentile(sub, 90.0))),
+                "shareTrivialLe900": round(sum(1 for v in sub if v <= 900) / len(sub), 4),
+            }
+        )
+
+    ad_buckets = []
+    for lo in range(600, 2200, 100):
+        hi = lo + 100 if lo < 2100 else 2201
+        cnt = sum(1 for v in ad if lo <= v < hi)
+        ad_buckets.append(
+            {
+                "minRating": lo,
+                "maxRating": 2200 if lo == 2100 else lo + 99,
+                "count": cnt,
+            }
+        )
+
+    diffs = [a - o for a, o in zip(ad, orig)]
+    down_idx = sorted(range(n), key=lambda idx: diffs[idx])[:10]
+    up_idx = sorted(range(n), key=lambda idx: -diffs[idx])[:10]
+
+    def sample_entry(i: int) -> dict[str, object]:
+        return {
+            "puzzleId": rows[i][0],
+            "originalRating": int(rows[i][1]),
+            "arrowDuelRating": int(rows[i][2]),
+            "delta": int(rows[i][2] - rows[i][1]),
+            "q1500": round(rows[i][4] / 10000.0, 4),
+        }
+
+    return {
+        "identity": identity,
+        "generatedAt": datetime.now(timezone.utc).isoformat(),
+        "totalPackPuzzles": total_pack_puzzles,
+        "totalArrowDuelEligible": total_eligible,
+        "ratedCount": n,
+        "elapsedSeconds": round(elapsed_seconds, 2),
+        "maiaIntuitionAt1500": {
+            "shareBlunderMoreTemptingLt35": round(sum(1 for q in q15 if q < 0.35) / n, 4),
+            "shareBalanced35To65": round(sum(1 for q in q15 if 0.35 <= q <= 0.65) / n, 4),
+            "shareGoodObviousGt65": round(sum(1 for q in q15 if q > 0.65) / n, 4),
+            "shareGoodOverwhelmingGt85": round(sum(1 for q in q15 if q > 0.85) / n, 4),
+        },
+        "arrowDuelRating": summarize_pair(ad),
+        "arrowDuelRatingSprint": summarize_pair(ad_s),
+        "byOriginalBucket": orig_buckets,
+        "arrowDuelBuckets": ad_buckets,
+        "sampleLargestDrops": [sample_entry(i) for i in down_idx],
+        "sampleLargestRises": [sample_entry(i) for i in up_idx],
+    }
+
+
 def run_rating_job(
     *,
     input_path: Path,
@@ -746,37 +905,52 @@ def run_rating_job(
                 src_conn, out_conn, layout.row_encoding, batch_size=batch_size, limit=limit
             ):
                 q_mat = scorer.score_batch(batch, layout.row_encoding, elos)
-                orig_arr = np.fromiter((r.rating for r in batch), dtype=np.int32, count=len(batch))
+                orig_vals: Any = (
+                    np.fromiter((r.rating for r in batch), dtype=np.int32, count=len(batch))
+                    if np is not None
+                    else [r.rating for r in batch]
+                )
                 ad_full = solve_prompted_arrow_duel_batch(
-                    orig_arr,
+                    orig_vals,
                     elos,
                     q_mat,
                     target_prob=DEFAULT_TARGET_PROB,
                     check_rate=DEFAULT_FULL_CHECK_RATE,
                 )
                 ad_sprint = solve_prompted_arrow_duel_batch(
-                    orig_arr,
+                    orig_vals,
                     elos,
                     q_mat,
                     target_prob=DEFAULT_TARGET_PROB,
                     check_rate=DEFAULT_SPRINT_CHECK_RATE,
                 )
-                q_bp = np.clip(np.rint(q_mat * 10000.0), 0, 10000).astype(np.int32)
-
-                insert_rows = [
-                    (
-                        batch[i].puzzle_id,
-                        int(orig_arr[i]),
-                        int(ad_full[i]),
-                        int(ad_sprint[i]),
-                        int(q_bp[i, 0]),
-                        int(q_bp[i, 1]),
-                        int(q_bp[i, 2]),
-                        int(q_bp[i, 3]),
-                        int(q_bp[i, 4]),
-                    )
-                    for i in range(len(batch))
-                ]
+                if np is not None:
+                    q_bp = np.clip(np.rint(np.asarray(q_mat, dtype=np.float32) * 10000.0), 0, 10000).astype(np.int32)
+                    insert_rows = [
+                        (
+                            batch[i].puzzle_id,
+                            int(orig_vals[i]),
+                            int(ad_full[i]),
+                            int(ad_sprint[i]),
+                            int(q_bp[i, 0]),
+                            int(q_bp[i, 1]),
+                            int(q_bp[i, 2]),
+                            int(q_bp[i, 3]),
+                            int(q_bp[i, 4]),
+                        )
+                        for i in range(len(batch))
+                    ]
+                else:
+                    insert_rows = [
+                        (
+                            batch[i].puzzle_id,
+                            int(orig_vals[i]),
+                            int(ad_full[i]),
+                            int(ad_sprint[i]),
+                            *(max(0, min(10000, int(round(float(q_mat[i][j]) * 10000.0)))) for j in range(5)),
+                        )
+                        for i in range(len(batch))
+                    ]
                 with out_conn:
                     out_conn.executemany(
                         """

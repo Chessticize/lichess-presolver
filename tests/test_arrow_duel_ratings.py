@@ -6,8 +6,6 @@ import tempfile
 import unittest
 from pathlib import Path
 
-import numpy as np
-
 from rate_arrow_duel_puzzles import (
     DEFAULT_ELO_GRID,
     ArrowDuelPuzzleRow,
@@ -25,10 +23,7 @@ class StubScorer:
         self.model_identity = {"family": "stub", "version": 1}
 
     def score_batch(self, rows, row_encoding: str, elos):
-        out = np.zeros((len(rows), len(elos)), dtype=np.float32)
-        for i, row in enumerate(rows):
-            out[i] = self.q_map[row.puzzle_id]
-        return out
+        return [list(self.q_map[row.puzzle_id]) for row in rows]
 
 
 class ArrowDuelRatingFormulaTests(unittest.TestCase):
@@ -48,17 +43,14 @@ class ArrowDuelRatingFormulaTests(unittest.TestCase):
         self.assertAlmostEqual(est, 1691, delta=2)
 
     def test_batch_solver_matches_scalar_solver(self) -> None:
-        origs = np.array([700, 1100, 1500, 1850, 2150], dtype=np.int32)
-        qs = np.array(
-            [
-                [0.10, 0.25, 0.45, 0.65, 0.85],
-                [0.80, 0.85, 0.90, 0.92, 0.95],
-                [0.50, 0.50, 0.50, 0.50, 0.50],
-                [0.02, 0.05, 0.12, 0.25, 0.40],
-                [0.72, 0.76, 0.80, 0.84, 0.88],
-            ],
-            dtype=np.float32,
-        )
+        origs = [700, 1100, 1500, 1850, 2150]
+        qs = [
+            [0.10, 0.25, 0.45, 0.65, 0.85],
+            [0.80, 0.85, 0.90, 0.92, 0.95],
+            [0.50, 0.50, 0.50, 0.50, 0.50],
+            [0.02, 0.05, 0.12, 0.25, 0.40],
+            [0.72, 0.76, 0.80, 0.84, 0.88],
+        ]
         batch_full = solve_prompted_arrow_duel_batch(origs, DEFAULT_ELO_GRID, qs, check_rate=1.0)
         batch_sprint = solve_prompted_arrow_duel_batch(origs, DEFAULT_ELO_GRID, qs, check_rate=0.75)
         for i in range(len(origs)):
@@ -73,18 +65,18 @@ class ArrowDuelRatingFormulaTests(unittest.TestCase):
 
     def test_fen_encoder_handles_white_and_black_mirroring(self) -> None:
         # White king on e1 (sq 4), black king on e8 (sq 60)
-        arr_w = np.zeros((64, 12), dtype=np.float32)
+        arr_w = [[0.0] * 12 for _ in range(64)]
         is_black_w = encode_fen_to_maia3("4k3/8/8/8/8/8/8/4K3 w - - 0 1", arr_w)
         self.assertFalse(is_black_w)
-        self.assertEqual(arr_w[4, 5], 1.0)   # White King -> own king channel 5 on e1
-        self.assertEqual(arr_w[60, 11], 1.0)  # Black King -> opp king channel 11 on e8
+        self.assertEqual(arr_w[4][5], 1.0)   # White King -> own king channel 5 on e1
+        self.assertEqual(arr_w[60][11], 1.0)  # Black King -> opp king channel 11 on e8
 
         # Same position with Black to move: board is rank-mirrored and colors swapped!
-        arr_b = np.zeros((64, 12), dtype=np.float32)
+        arr_b = [[0.0] * 12 for _ in range(64)]
         is_black_b = encode_fen_to_maia3("4k3/8/8/8/8/8/8/4K3 b - - 0 1", arr_b)
         self.assertTrue(is_black_b)
-        self.assertEqual(arr_b[4, 5], 1.0)   # Black King mirrored e8->e1, own king channel 5
-        self.assertEqual(arr_b[60, 11], 1.0)  # White King mirrored e1->e8, opp king channel 11
+        self.assertEqual(arr_b[4][5], 1.0)   # Black King mirrored e8->e1, own king channel 5
+        self.assertEqual(arr_b[60][11], 1.0)  # White King mirrored e1->e8, opp king channel 11
 
 
 class ArrowDuelRatingPipelineTests(unittest.TestCase):
