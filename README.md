@@ -128,10 +128,26 @@ semantics, verification, and troubleshooting. The
 [Arrow Duel route metric note](docs/ARROW_DUEL_ROUTE_METRICS.md) records the
 root-exclusion contract and the depth 10/16/20 stability and speed benchmark.
 
+## Rate Arrow Duel puzzles & train offline difficulty models
+
+- `rate_arrow_duel_puzzles.py` computes Maia-3 prompted-comparison Arrow Duel
+  ratings (`arrow_duel_rating`, `arrow_duel_rating_sprint`, and raw 5-Elo
+  pairwise preferences `q_700..q_2300`) for every Arrow Duel-eligible puzzle in
+  a Core Pack SQLite database, with SHA-256 identity verification and
+  `--resume` support.
+- `train_puzzle_difficulty_model.py` trains compact pure-JSON tree ensembles
+  (`sf_heuristic_v1` fallback and `maia2_sf_v1` Mobile-Lite 2-Elo model) on
+  stratified Core Pack samples and optionally exports & verifies Maia-2 INT8
+  ONNX weights for offline mobile inference.
+
+See [Puzzle difficulty rating methodology](docs/PUZZLE_DIFFICULTY_RATING.md)
+for the exact formulas, validation metrics, and full-pack benchmarks.
+
 ## Project documents
 
 - [Usage guide](docs/USAGE.md)
 - [Dataset provenance and quality](docs/DATASET.md)
+- [Puzzle difficulty rating methodology](docs/PUZZLE_DIFFICULTY_RATING.md)
 - [Contributing](CONTRIBUTING.md)
 
 ## Licensing
